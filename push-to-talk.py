@@ -24,31 +24,63 @@ def appRunning():
         for flag, pat in APPS
     )
 
-def sourceIds():
-    """IDs de todos os nós Audio/Source (mic físico + Easy Effects Source)."""
+def sources():
+    """{node.name: id} de todos os nós Audio/Source (mic físico + Easy Effects Source).
+
+    O id muda quando o nó é recriado (ex.: Easy Effects reiniciando); o node.name
+    é estável, por isso é a chave usada para lembrar o estado original."""
     try:
         out = subprocess.run(["pw-dump"], capture_output=True, text=True, timeout=3).stdout
         nodes = json.loads(out)
     except Exception:
-        return []
-    ids = []
+        return {}
+    found = {}
     for n in nodes:
         if n.get("type") != "PipeWire:Interface:Node":
             continue
         props = n.get("info", {}).get("props", {})
         if props.get("media.class", "").startswith("Audio/Source"):
-            ids.append(n["id"])
-    return ids
+            found[props.get("node.name") or f"id:{n['id']}"] = n["id"]
+    return found
 
-def mute(ids, m):
-    for i in ids:
-        subprocess.run(["wpctl", "set-mute", str(i), "1" if m else "0"],
-                       stdout=DN, stderr=DN)
+def isMuted(i):
+    out = subprocess.run(["wpctl", "get-volume", str(i)], capture_output=True, text=True).stdout
+    return "[MUTED]" in out
 
-ids = sourceIds()
+def setMute(i, m):
+    subprocess.run(["wpctl", "set-mute", str(i), "1" if m else "0"], stdout=DN, stderr=DN)
+
+# Estado de mute de cada fonte ANTES de o PTT assumir o controle. Só existe
+# enquanto o PTT está ativo; ao desativar ou encerrar, cada fonte volta
+# exatamente ao estado em que estava (um mic já mutado continua mutado).
+original = {}
+
+def remember(srcs):
+    """Guarda o estado original das fontes ainda não vistas (inclusive as que
+    aparecem depois, como um Easy Effects recriado)."""
+    for name, i in srcs.items():
+        if name not in original:
+            original[name] = isMuted(i)
+
+def mute(srcs, m):
+    remember(srcs)
+    for i in srcs.values():
+        setMute(i, m)
+
+def restore():
+    """Devolve cada fonte ao estado original. Idempotente."""
+    if not original:
+        return
+    current = sources()
+    for name, wasMuted in original.items():
+        if name in current:
+            setMute(current[name], wasMuted)
+    original.clear()
+
+srcs = sources()
 
 def cleanup(*a):
-    mute(sourceIds() or ids, False)
+    restore()
     sys.exit(0)
 
 signal.signal(signal.SIGTERM, cleanup)
@@ -99,13 +131,16 @@ try:
             lastCheck = now
             running = appRunning()
             scanDevices()      # pega teclados conectados depois
-            ids = sourceIds()  # atualiza (EasyEffects pode recriar os nós)
+            srcs = sources()   # atualiza (EasyEffects pode recriar os nós)
             if running != active:
                 active = running
                 pressed = False
-                mute(ids, active)       # liga: começa mutado / desliga: desmuta
+                if active:
+                    mute(srcs, True)    # liga: guarda o estado e começa mutado
+                else:
+                    restore()           # desliga: volta ao estado original
             elif active:
-                mute(ids, not pressed)  # reaplica, caso algo tenha revertido
+                mute(srcs, not pressed)  # reaplica, caso algo tenha revertido
 
         for item, mask in sel.select(timeout=TICK):
             try:
@@ -118,6 +153,6 @@ try:
             for e in events:
                 if active and e.type == ecodes.EV_KEY and e.code == KEY and e.value in (0, 1):
                     pressed = (e.value == 1)
-                    mute(ids, not pressed)
+                    mute(srcs, not pressed)
 finally:
-    mute(ids, False)
+    restore()

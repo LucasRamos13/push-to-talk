@@ -8,7 +8,8 @@ Funciona em Wayland e X11, pois lê o teclado direto via `evdev`.
 - Enquanto um app de voz (**Discord** ou **Stoat**) estiver aberto, todos os
   microfones (`Audio/Source`, incluindo o Easy Effects Source) ficam mutados.
 - Segurar **Caps Lock** desmuta; soltar volta a mutar.
-- Ao fechar o app de voz (ou parar o script) os microfones são desmutados.
+- Ao fechar o app de voz (ou parar o script) cada microfone volta ao estado em que estava antes do PTT
+  assumir: um mic que já estava mutado continua mutado.
 - O mute é reaplicado a cada segundo, caso algo o reverta.
 - Teclados conectados/desconectados depois são detectados automaticamente.
 
